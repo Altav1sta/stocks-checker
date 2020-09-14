@@ -31,14 +31,16 @@ namespace WebApp
             _nextSignalTime = DateTime.UtcNow.AddSeconds(SignalIntervalSeconds);
         }
 
-        public void Run()
+        public async Task RunAsync()
         {
             _client.StartReceiving();
+            await SendMessageAsync("Bot started!");
         }
 
-        public void Stop()
+        public async Task StopAsync()
         {
             _client.StopReceiving();
+            await SendMessageAsync("Bot is shutting down :(");
         }
 
         public async Task SendLevelSignalAsync(string ticker, double level)
@@ -88,7 +90,7 @@ namespace WebApp
 
                 var isAdded = await context.Chats.AnyAsync(x => x.Id == chatId);
 
-                if (!isAdded && e.Message.From.Username.Contains("a1tav1sta"))
+                if (!isAdded)
                 {
                     await context.Chats.AddAsync(new Models.Chat
                     {
@@ -104,6 +106,38 @@ namespace WebApp
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error while processing message {MessageEventArgs}", e);
+            }
+        }
+
+        private async Task SendMessageAsync(string text)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                using var context = scope.ServiceProvider.GetService<ApplicationDbContext>();
+
+                var chats = await context.Chats.ToListAsync();
+
+                foreach (var chat in chats)
+                {
+                    try
+                    {
+                        await _client.SendTextMessageAsync(chat.Id, text);
+                    }
+                    catch (ApiRequestException ex)
+                    {
+                        if (ex.ErrorCode == 403)
+                        {
+                            var record = await context.Chats.FirstOrDefaultAsync(x => x.Id == chat.Id);
+                            if (record != null) context.Remove(record);
+                            await context.SaveChangesAsync();
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occured while sending message");
             }
         }
     }

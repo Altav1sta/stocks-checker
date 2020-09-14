@@ -40,7 +40,7 @@ namespace WebApp
             _context.WebSocketException += WebSocketExceptionHandler;
             _context.StreamingClosed += StreamingClosedHandler;
 
-            _bot.Run();
+            _bot.RunAsync().GetAwaiter().GetResult();
         }
 
 
@@ -153,7 +153,7 @@ namespace WebApp
         public void Dispose()
         {
             _logger.LogInformation("Tinkoff client disposed");
-            _bot?.Stop();
+            _bot?.StopAsync().GetAwaiter().GetResult();
             _context?.Dispose();
             _connection?.Dispose();
         }
