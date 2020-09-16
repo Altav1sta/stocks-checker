@@ -43,11 +43,11 @@ namespace WebApp
             await SendMessageAsync("Bot is shutting down :(");
         }
 
-        public async Task SendLevelSignalAsync(string ticker, double level)
+        public async Task<bool> SendLevelSignalAsync(string ticker, double level)
         {
             try
             {
-                if (_nextSignalTime > DateTime.UtcNow) return;
+                if (_nextSignalTime > DateTime.UtcNow) return false;
 
                 using var scope = _scopeFactory.CreateScope();
                 using var context = scope.ServiceProvider.GetService<ApplicationDbContext>();
@@ -71,10 +71,14 @@ namespace WebApp
                         }
                     }
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "An error occured while sending signal for ticker {Ticker}", ticker);
+
+                return false;
             }
         }
 

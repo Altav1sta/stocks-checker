@@ -23,22 +23,22 @@ namespace WebApp
         public IDictionary<string, DateTime> NextSignalTime { get; } =
             new ConcurrentDictionary<string, DateTime>();
 
-        private readonly Connection _connection;
-        private readonly Context _context;
+        private readonly Credentials _credentials;
         private readonly ILogger _logger;
         private readonly Bot _bot;
         private readonly IDictionary<string, string> _tickersByFigi =
             new ConcurrentDictionary<string, string>();
 
+        private Connection _connection;
+        private Context _context;
+
         public TinkoffClient(IOptions<Credentials> options, ILogger<TinkoffClient> logger, Bot bot)
         {
+            _credentials = options.Value;
             _logger = logger;
             _bot = bot;
-            _connection = ConnectionFactory.GetConnection(options.Value.TinkoffToken);
-            _context = _connection.Context;
-            _context.StreamingEventReceived += StreamingEventReceivedHandler;
-            _context.WebSocketException += WebSocketExceptionHandler;
-            _context.StreamingClosed += StreamingClosedHandler;
+
+            Initialize();
 
             _bot.RunAsync().GetAwaiter().GetResult();
         }
@@ -62,6 +62,17 @@ namespace WebApp
 
                 await _context.SendStreamingRequestAsync(request);
             }
+        }
+
+        private void Initialize()
+        {
+            _context?.Dispose();
+            _connection?.Dispose();
+            _connection = ConnectionFactory.GetConnection(_credentials.TinkoffToken);
+            _context = _connection.Context;
+            _context.StreamingEventReceived += StreamingEventReceivedHandler;
+            _context.WebSocketException += WebSocketExceptionHandler;
+            _context.StreamingClosed += StreamingClosedHandler;
         }
 
         private async void StreamingEventReceivedHandler(object sender, StreamingEventReceivedEventArgs args)
@@ -89,9 +100,9 @@ namespace WebApp
 
                         if (signalValue.HasValue)
                         {
-                            NextSignalTime[ticker] = DateTime.UtcNow.AddMinutes(SignalIntervalMinutes);
-                            
-                            await _bot.SendLevelSignalAsync(ticker, signalValue.Value);
+                            var success = await _bot.SendLevelSignalAsync(ticker, signalValue.Value);
+
+                            if (success) NextSignalTime[ticker] = DateTime.UtcNow.AddMinutes(SignalIntervalMinutes);
                         }
                     }
                     break;
@@ -109,6 +120,8 @@ namespace WebApp
         private void WebSocketExceptionHandler(object sender, WebSocketException e)
         {
             _logger.LogError(e, "Web socket error occured");
+
+            Initialize();
         }
 
         private void StreamingClosedHandler(object sender, EventArgs args)
