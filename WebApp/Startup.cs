@@ -21,7 +21,7 @@ namespace WebApp
         public void ConfigureServices(IServiceCollection services)
         {
             services.AddControllersWithViews();
-            services.Configure<Credentials>(Configuration);
+            services.Configure<Settings>(Configuration);
             services.AddDbContextPool<ApplicationDbContext>(x => x.UseMySql(Configuration.GetConnectionString("MySql")));
             services.AddSingleton<Bot>();
             services.AddSingleton<TinkoffClient>();
@@ -57,8 +57,7 @@ namespace WebApp
 
                 context.Database.Migrate();
 
-                var client = app.ApplicationServices.GetService<TinkoffClient>();
-                client.SubscribeForAllCandles().GetAwaiter().GetResult();
+                app.ApplicationServices.GetService<Bot>().RunAsync().GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {

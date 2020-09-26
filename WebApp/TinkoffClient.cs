@@ -8,39 +8,49 @@ using System.Net.WebSockets;
 using System.Threading.Tasks;
 using Tinkoff.Trading.OpenApi.Models;
 using Tinkoff.Trading.OpenApi.Network;
+using WebApp.Models;
 
 namespace WebApp
 {
-    internal sealed class TinkoffClient : IDisposable
+    internal sealed class TinkoffClient
     {
         public const int StockQuoteDepth = 1;
         public const double CapPercentForStep = 5;
         public const double StepPercentForDelta = 3;
         public const double MinPriceForSignal = 1;
-        public const int SignalIntervalMinutes = 30;
+
+        public event EventHandler<SendingSignalEventArgs> SendingSignalEvent;
+
         public IDictionary<string, CandlePayload> Candles { get; } =
             new ConcurrentDictionary<string, CandlePayload>();
         public IDictionary<string, DateTime> NextSignalTime { get; } =
             new ConcurrentDictionary<string, DateTime>();
 
-        private readonly Credentials _credentials;
+        private readonly Settings _settings;
         private readonly ILogger _logger;
-        private readonly Bot _bot;
+        private readonly IContext _context;
         private readonly IDictionary<string, string> _tickersByFigi =
             new ConcurrentDictionary<string, string>();
 
-        private Connection _connection;
-        private Context _context;
-
-        public TinkoffClient(IOptions<Credentials> options, ILogger<TinkoffClient> logger, Bot bot)
+        public TinkoffClient(IOptions<Settings> options, ILogger<TinkoffClient> logger)
         {
-            _credentials = options.Value;
+            _settings = options.Value;
             _logger = logger;
-            _bot = bot;
 
-            Initialize();
+            if (_settings.Mode.Equals("Test", StringComparison.OrdinalIgnoreCase))
+            {
+                var connection = ConnectionFactory.GetSandboxConnection(_settings.TinkoffSandboxToken);
+                _context = connection.Context;
+            }
+            else
+            {
+                var connection = ConnectionFactory.GetConnection(_settings.TinkoffToken);
+                _context = connection.Context;
+            }
 
-            _bot.RunAsync().GetAwaiter().GetResult();
+            _context.StreamingEventReceived += StreamingEventReceivedHandler;
+            _context.WebSocketException += WebSocketExceptionHandler;
+            _context.StreamingClosed += StreamingClosedHandler;
         }
 
 
@@ -64,18 +74,7 @@ namespace WebApp
             }
         }
 
-        private void Initialize()
-        {
-            _context?.Dispose();
-            _connection?.Dispose();
-            _connection = ConnectionFactory.GetConnection(_credentials.TinkoffToken);
-            _context = _connection.Context;
-            _context.StreamingEventReceived += StreamingEventReceivedHandler;
-            _context.WebSocketException += WebSocketExceptionHandler;
-            _context.StreamingClosed += StreamingClosedHandler;
-        }
-
-        private async void StreamingEventReceivedHandler(object sender, StreamingEventReceivedEventArgs args)
+        private void StreamingEventReceivedHandler(object sender, StreamingEventReceivedEventArgs args)
         {
             switch (args.Response)
             {
@@ -98,13 +97,9 @@ namespace WebApp
                     {
                         var signalValue = GetSignalValue(currentValue, previousValue);
 
-                        if (signalValue.HasValue)
-                        {
-                            var success = await _bot.SendLevelSignalAsync(ticker, signalValue.Value);
-
-                            if (success) NextSignalTime[ticker] = DateTime.UtcNow.AddMinutes(SignalIntervalMinutes);
-                        }
+                        if (signalValue.HasValue) RaiseSendingSignalEvent(ticker, signalValue.Value);
                     }
+
                     break;
 
                 case StreamingErrorResponse response:
@@ -120,13 +115,18 @@ namespace WebApp
         private void WebSocketExceptionHandler(object sender, WebSocketException e)
         {
             _logger.LogError(e, "Web socket error occured");
-
-            Initialize();
         }
 
         private void StreamingClosedHandler(object sender, EventArgs args)
         {
             _logger.LogInformation("Tinkoff streaming closed");
+        }
+
+        private void RaiseSendingSignalEvent(string ticker, double value)
+        {
+            var handler = SendingSignalEvent;
+            var args = new SendingSignalEventArgs { Ticker = ticker, Value = value };
+            handler?.Invoke(this, args);
         }
 
         private double? GetSignalValue(double currentValue, double? previousValue)
@@ -161,14 +161,6 @@ namespace WebApp
         private double GetClosestLevel(double value, double step)
         {
             return step * Math.Round(value / step, MidpointRounding.ToPositiveInfinity);
-        }
-
-        public void Dispose()
-        {
-            _logger.LogInformation("Tinkoff client disposed");
-            _bot?.StopAsync().GetAwaiter().GetResult();
-            _context?.Dispose();
-            _connection?.Dispose();
         }
     }
 }
